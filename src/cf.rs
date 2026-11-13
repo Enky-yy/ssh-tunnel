@@ -53,13 +53,19 @@ pub fn find_binary(explicit: Option<&Path>) -> Option<PathBuf> {
     {
         return Some(p.to_path_buf());
     }
-    if let Some(p) = env::var_os("CLOUDFLARED") {
+    // $CLOUDFLARED and $PATH are attacker-controlled in an elevated shell, so
+    // only trust them for the invoking user.
+    if !elevated()
+        && let Some(p) = env::var_os("CLOUDFLARED")
+    {
         let p = PathBuf::from(p);
         if is_exec(&p) {
             return Some(p);
         }
     }
-    if let Some(path) = env::var_os("PATH") {
+    if !elevated()
+        && let Some(path) = env::var_os("PATH")
+    {
         for dir in env::split_paths(&path) {
             let cand = dir.join("cloudflared");
             if is_exec(&cand) {
@@ -72,6 +78,21 @@ pub fn find_binary(explicit: Option<&Path>) -> Option<PathBuf> {
         return Some(local);
     }
     None
+}
+
+fn elevated() -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // /proc/self is owned by the process's effective uid.
+        std::fs::metadata("/proc/self")
+            .map(|m| m.uid() == 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
 }
 
 pub async fn run(bin: &Path, args: &[&str]) -> Result<Output> {
@@ -157,6 +178,7 @@ pub async fn login(bin: &Path) -> Result<()> {
 }
 
 pub fn write_cf_config(cfg: &Config, path: &Path) -> Result<()> {
+    // Config values are allowlist-validated, so they cannot break out of YAML.
     let body = format!(
         "tunnel: {}\ncredentials-file: {}\n\ningress:\n  - hostname: {}\n    service: ssh://{}\n  - service: http_status:404\n",
         cfg.tunnel_id,
@@ -168,6 +190,14 @@ pub fn write_cf_config(cfg: &Config, path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    if let Ok(meta) = std::fs::symlink_metadata(path)
+        && !meta.file_type().is_file()
+    {
+        bail!(
+            "{} is not a regular file; refusing to overwrite it",
+            path.display()
+        );
+    }
     if path.exists() {
         let existing = std::fs::read_to_string(path)?;
         if existing != body {
@@ -176,5 +206,6 @@ pub fn write_cf_config(cfg: &Config, path: &Path) -> Result<()> {
         }
     }
     std::fs::write(path, body)?;
+    crate::config::set_mode(path, 0o600)?;
     Ok(())
 }

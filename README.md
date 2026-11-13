@@ -128,8 +128,9 @@ Install Termux from F-Droid (not the Play Store), then:
 ssh-tunnel termux | bash
 ```
 
-The script installs `openssh` and `cloudflared`, creates a device key, writes
-the SSH config, and prints the public key to register.
+The script installs `openssh` and `cloudflared`, creates a device key, appends a
+marked `Host` block to `~/.ssh/config` (backing up the old file), and prints the
+public key to register.
 
 ## How it works
 
@@ -192,6 +193,9 @@ Files the tool manages:
 | `sshd` | Nothing listening on `local_target` |
 | `authorized_keys` | No keys registered |
 | `password auth` | Password login still enabled |
+| `ssh dir` | `~/.ssh` is group/world accessible (sshd will refuse it) |
+| `key file perms` | `authorized_keys` is group/world writable or a symlink |
+| `secret perms` | Tunnel credentials readable by other users |
 | `end-to-end` (`--deep`) | Real SSH login failed |
 
 ## Security model
@@ -204,6 +208,27 @@ Files the tool manages:
 - **Client IPs are hidden.** `sshd` sees every tunnel connection as `127.0.0.1`, so `fail2ban` cannot distinguish clients. Use key-only auth and `MaxAuthTries`.
 - Add [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/)
   in front of the hostname if you want an identity gate.
+
+### Input handling
+
+Config values are written into a systemd unit, a YAML file, an `ssh_config`
+block, and a shell script, so each field is checked against a strict allowlist
+before use (`tunnel`, `tunnel_id`, `hostname`, `user`, `local_target`, `ssh_alias`).
+Newlines, quotes, shell metacharacters, and path separators are rejected, which
+rules out unit/YAML/shell injection from a tampered `config.toml`.
+
+`client add` treats a pasted key as untrusted:
+
+- exactly one line starting with `ssh-`, `ecdsa-`, or `sk-`
+- no control characters and no `command=`/`from=`/quote prefixes
+- validated by `ssh-keygen -l -f`, and the fingerprint is printed so you can compare it on the device
+- refuses to write if `~/.ssh/authorized_keys` is a symlink or not a regular file
+- input is capped at 64 KiB
+
+`cloudflared` discovery only trusts `$CLOUDFLARED` and `$PATH` for non-root
+callers, so an elevated shell cannot be tricked into running a different binary.
+The Termux script appends a marked `Host` block (with a backup) instead of
+overwriting an existing `~/.ssh/config`.
 
 ## Troubleshooting
 

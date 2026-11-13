@@ -26,6 +26,17 @@ fn apply_user_env(cmd: &mut Command) {
     }
 }
 
+/// systemd expands `%` specifiers and splits on whitespace unless quoted, so
+/// escape both before embedding a path in a unit file.
+fn unit_arg(value: &std::path::Display<'_>) -> String {
+    let raw = value.to_string();
+    let escaped = raw
+        .replace('%', "%%")
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    format!("\"{escaped}\"")
+}
+
 pub fn unit_contents(cfg: &Config) -> String {
     format!(
         "[Unit]\n\
@@ -35,7 +46,7 @@ pub fn unit_contents(cfg: &Config) -> String {
          \n\
          [Service]\n\
          Type=simple\n\
-         ExecStart=\"{cf}\" --no-autoupdate --config \"{config}\" tunnel run\n\
+         ExecStart={cf} --no-autoupdate --config {config} tunnel run\n\
          Restart=on-failure\n\
          RestartSec=5s\n\
          TimeoutStopSec=10s\n\
@@ -44,8 +55,8 @@ pub fn unit_contents(cfg: &Config) -> String {
          WantedBy=default.target\n",
         tunnel = cfg.tunnel,
         hostname = cfg.hostname,
-        cf = cfg.cloudflared.display(),
-        config = cfg.cf_config().display(),
+        cf = unit_arg(&cfg.cloudflared.display()),
+        config = unit_arg(&cfg.cf_config().display()),
     )
 }
 
@@ -122,4 +133,32 @@ pub async fn logs(cfg: &Config, follow: bool) -> Result<()> {
         bail!("journalctl failed");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unit_arg;
+    use std::path::Path;
+
+    #[test]
+    fn quotes_a_plain_path() {
+        assert_eq!(
+            unit_arg(&Path::new("/usr/bin/cloudflared").display()),
+            "\"/usr/bin/cloudflared\""
+        );
+    }
+
+    #[test]
+    fn escapes_quotes_and_backslashes() {
+        let arg = unit_arg(&Path::new("/tmp/a\"b\\c").display());
+        assert_eq!(arg, "\"/tmp/a\\\"b\\\\c\"");
+    }
+
+    #[test]
+    fn escapes_systemd_specifiers() {
+        assert_eq!(
+            unit_arg(&Path::new("/tmp/100%").display()),
+            "\"/tmp/100%%\""
+        );
+    }
 }

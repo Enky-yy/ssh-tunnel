@@ -247,7 +247,8 @@ sudo ufw reload
 
 Nothing needs to be allowed for the tunnel: `cloudflared` dials out, and
 loopback traffic bypasses the firewall. Check what else is listening with
-`ss -tlnp`.
+`ss -tlnp`. `scripts/harden-host.sh` applies this along with the sshd changes
+below (run it with `sudo`).
 
 **Bind sshd to loopback.** The tunnel forwards to `127.0.0.1:22`, so sshd does
 not need to be on the LAN. In `/etc/ssh/sshd_config.d/10-hardening.conf`:

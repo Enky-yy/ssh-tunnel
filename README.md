@@ -1,49 +1,104 @@
 # ssh-tunnel
 
-Turnkey remote SSH access to a machine behind NAT, using Cloudflare Tunnel.
-No VPS, no port forwarding, no inbound ports.
+[![CI](https://github.com/Enky-yy/ssh-tunnel/actions/workflows/ci.yml/badge.svg)](https://github.com/Enky-yy/ssh-tunnel/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org)
 
-The laptop runs `cloudflared` as a user service and dials out to Cloudflare.
-Clients connect to `ssh.<your-domain>` on 443 with a stock `ssh` client plus
-`cloudflared` as a `ProxyCommand`.
+**Remote SSH into a machine behind NAT — no VPS, no port forwarding, no inbound ports.**
+
+`ssh-tunnel` is a small CLI that wires up [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+for SSH. Your machine dials out to Cloudflare; any device with `ssh` and
+`cloudflared` can then reach it from anywhere on port 443.
 
 ```
 client  ──TLS 443──►  Cloudflare edge  ◄──outbound──  cloudflared  ──►  sshd :22
 ```
 
+Works on locked-down networks (campus, hotel, CGNAT) because the server side
+only makes outbound connections.
+
+## Why
+
+If your machine sits behind a NAT you don't control, you cannot forward port 22.
+Cloudflare Tunnel solves the networking problem. This tool solves the twelve
+manual steps around it: account login, tunnel creation, DNS, ingress config,
+systemd unit, verification, and per-device onboarding — plus a `doctor`
+command that tells you *which* layer is broken.
+
+## Features
+
+- **One-time setup** — `ssh-tunnel setup` does login, tunnel, DNS, service, and verification.
+- **Layered diagnostics** — `doctor` checks 11 independent layers, not just "is it up".
+- **No inbound ports** — only outbound 443/QUIC from the host.
+- **Key-only by design** — SSH encryption and host-key verification stay end to end; Cloudflare only relays ciphertext.
+- **Per-device onboarding** — prints the exact SSH config, registers a public key from stdin, optional QR.
+- **Android ready** — `ssh-tunnel termux` emits a Termux bootstrap script.
+- **Systemd user service** — starts on login, restarts on failure.
+- **JSON output** — `--json` for `status` and `doctor`, easy to script.
+- **Idempotent** — safe to re-run `setup`.
+
+## Requirements
+
+| Requirement | Notes |
+|---|---|
+| Linux with `systemd --user` | Service management is systemd-specific |
+| [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) | Any recent version |
+| OpenSSH server | `sshd` listening on `127.0.0.1:22` (default) |
+| A domain managed by Cloudflare | Free plan is fine |
+| SSH keypair | Password auth should be disabled |
+
 ## Install
 
+From source:
+
 ```bash
+git clone https://github.com/Enky-yy/ssh-tunnel.git
+cd ssh-tunnel
 cargo build --release
 install -Dm755 target/release/ssh-tunnel ~/.local/bin/ssh-tunnel
 ```
 
-`cloudflared` must be installed and logged in (`ssh-tunnel setup` will prompt).
+Or with Cargo:
+
+```bash
+cargo install --path .
+```
+
+Make sure `~/.local/bin` (or `~/.cargo/bin`) is in your `PATH`.
 
 ## Quick start
 
 ```bash
-ssh-tunnel init        # detect domain/hostname/tunnel, write config
-ssh-tunnel setup       # login, create tunnel, route DNS, install service
-ssh-tunnel doctor      # verify every layer
+ssh-tunnel init          # detect domain, tunnel, user, key
+ssh-tunnel setup         # login, create tunnel, route DNS, install service
+ssh-tunnel doctor        # verify every layer
 ssh-tunnel status
+```
+
+`init` is interactive. Use `ssh-tunnel init --yes` to accept detected defaults
+(useful when re-running against an existing setup).
+
+When `setup` finishes, it prints:
+
+```
+✓ ready: ssh <alias>
 ```
 
 ## Commands
 
-| Command | What it does |
+| Command | Description |
 |---|---|
 | `init [--yes]` | Write `~/.config/ssh-tunnel/config.toml` |
-| `setup [--force-dns]` | Create tunnel, route DNS, write config + systemd unit, start |
+| `setup [--force-dns]` | Create tunnel, route DNS, write ingress + systemd unit, start, verify |
 | `up` / `down` / `restart` | Control `cloudflared-<tunnel>.service` |
-| `status [--json]` | Tunnel, connections, DNS, service state |
-| `doctor [--deep] [--json]` | Check config → DNS → service → edge → sshd → auth |
-| `logs [-f]` | `journalctl --user -u cloudflared-<tunnel>` |
-| `client add <name> [--key-file -] [--qr] [--identity]` | Print SSH config, register a public key |
+| `status [--json]` | Tunnel ID, edge connections, DNS, service state |
+| `doctor [--deep] [--json]` | Check config → cert → ingress → DNS → service → edge → sshd → auth |
+| `logs [-f]` | Tail the user service journal |
+| `client add <name> [--key-file -] [--qr] [--identity]` | Print a device's SSH config; register its public key |
 | `client list` | Fingerprints from `authorized_keys` |
 | `termux` | Print an Android/Termux setup script |
 
-## Typical onboarding
+## Onboarding a device
 
 On the new device:
 
@@ -52,30 +107,136 @@ ssh-keygen -t ed25519 -C "pixel"
 cat ~/.ssh/id_ed25519.pub
 ```
 
-On the laptop:
+On the host:
 
 ```bash
-ssh-tunnel client add pixel --key-file -   # paste the key
-ssh-tunnel client add pixel --qr           # optional QR
+ssh-tunnel client add pixel --key-file -   # paste the public key
+ssh-tunnel client add pixel --qr           # print the SSH block + a QR code
 ```
 
-On the device, add the printed `Host` block to `~/.ssh/config`, then `ssh <alias>`.
+Add the printed `Host` block to the device's `~/.ssh/config`, then:
 
-## Security
+```bash
+ssh <alias>
+```
 
-- SSH stays key-only; the tunnel does not terminate SSH.
-- Cloudflare only sees SSH ciphertext; host keys still verify end-to-end.
-- `sshd` sees every tunnel connection as `127.0.0.1`, so `fail2ban` cannot
-  distinguish clients. Use key-only auth and `MaxAuthTries`.
-- Add Cloudflare Access later if you want an identity gate in front of SSH.
-- Quick tunnels (`trycloudflare.com`) do **not** support SSH, so this tool
-  only uses named tunnels on your own zone.
+### Android (Termux)
 
-## Files
+Install Termux from F-Droid (not the Play Store), then:
+
+```bash
+ssh-tunnel termux | bash
+```
+
+The script installs `openssh` and `cloudflared`, creates a device key, writes
+the SSH config, and prints the public key to register.
+
+## How it works
+
+1. `cloudflared` on the host holds a persistent outbound connection to Cloudflare.
+2. A DNS record (`ssh.example.com`) points at the Cloudflare edge.
+3. A client runs `cloudflared access ssh --hostname ssh.example.com` as its SSH `ProxyCommand`.
+4. The edge forwards the stream down the tunnel to the host's `cloudflared`.
+5. `cloudflared` connects to `127.0.0.1:22`, where `sshd` authenticates the key.
+
+SSH runs end to end; Cloudflare cannot read the session or impersonate the host
+without breaking host-key verification.
+
+## Configuration
+
+`~/.config/ssh-tunnel/config.toml`:
+
+```toml
+tunnel = "g15"
+tunnel_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+hostname = "ssh.example.com"
+user = "alice"
+local_target = "127.0.0.1:22"
+cloudflared = "/home/alice/.local/bin/cloudflared"
+identity_file = "/home/alice/.ssh/id_ed25519"
+```
+
+| Field | Meaning |
+|---|---|
+| `tunnel` | Cloudflare tunnel name |
+| `tunnel_id` | UUID, filled in by `setup` |
+| `hostname` | Public SSH hostname |
+| `user` | Unix user that `sshd` authenticates |
+| `local_target` | Where `cloudflared` forwards (`ssh://<target>`) |
+| `cloudflared` | Path to the binary |
+| `identity_file` | Host's key, used only by `doctor --deep` |
+| `ssh_alias` | Optional alias override (defaults to `tunnel`) |
+
+Files the tool manages:
 
 | Path | Purpose |
 |---|---|
-| `~/.config/ssh-tunnel/config.toml` | Tunnel name, hostname, user, paths |
-| `~/.cloudflared/config.yml` | Cloudflare ingress (`ssh://127.0.0.1:22`) |
-| `~/.cloudflared/<uuid>.json` | Tunnel credentials |
-| `~/.config/systemd/user/cloudflared-<tunnel>.service` | Tunnel service |
+| `~/.cloudflared/config.yml` | Ingress: hostname → `ssh://127.0.0.1:22` |
+| `~/.cloudflared/<uuid>.json` | Tunnel credentials (`chmod 400`) |
+| `~/.cloudflared/cert.pem` | Account certificate (`chmod 600`) |
+| `~/.config/systemd/user/cloudflared-<tunnel>.service` | Service unit |
+| `~/.ssh/authorized_keys` | Authorized public keys |
+
+## What `doctor` checks
+
+| Check | Failure means |
+|---|---|
+| `config` | `init` was never run |
+| `cloudflared` | Binary missing or broken |
+| `certificate` | `cloudflared tunnel login` not done |
+| `credentials` | Tunnel credentials missing |
+| `ingress` | `config.yml` hostname/target mismatch |
+| `dns` | Hostname does not resolve |
+| `service` | Unit inactive or not enabled |
+| `edge` | Hostname:443 unreachable |
+| `sshd` | Nothing listening on `local_target` |
+| `authorized_keys` | No keys registered |
+| `password auth` | Password login still enabled |
+| `end-to-end` (`--deep`) | Real SSH login failed |
+
+## Security model
+
+- **Key-only SSH.** The tool warns if `PasswordAuthentication` is still enabled.
+- **No credential storage.** Keys are never embedded or copied; the CLI only prints paths and appends public keys.
+- **Least exposure.** Only `localhost:22` is exposed through the tunnel.
+- **End-to-end SSH.** Cloudflare relays ciphertext; host keys still verify the server.
+- **Local secrets.** `cert.pem` (600), tunnel credentials (400), and config (600).
+- **Client IPs are hidden.** `sshd` sees every tunnel connection as `127.0.0.1`, so `fail2ban` cannot distinguish clients. Use key-only auth and `MaxAuthTries`.
+- Add [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/)
+  in front of the hostname if you want an identity gate.
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `lookup … no such host` right after `setup` | Stale resolver cache: `resolvectl flush-caches` |
+| `Permission denied (publickey)` | Key not in `authorized_keys`, or wrong `IdentityFile` |
+| `cloudflared: command not found` on client | Install `cloudflared` (Termux: `pkg install cloudflared`) |
+| Service dies when you log out over SSH | `sudo loginctl enable-linger $USER` |
+| QUIC blocked on a network | Add `--protocol http2` to the unit's `ExecStart` |
+| `doctor --deep` warns about auth | Passphrase key needs `ssh-add` (BatchMode cannot prompt) |
+| Tunnel works, DNS does not | Wait a minute, then `ssh-tunnel doctor` |
+
+## Limitations
+
+- **Linux + systemd only.** No launchd/Windows service support.
+- **SSH only.** This is not a VPN; only `local_target` is exposed.
+- **Quick tunnels are unsupported.** `trycloudflare.com` quick tunnels reject SSH (`websocket: bad handshake`), so named tunnels are required.
+- **Single ingress rule.** `setup` rewrites `~/.cloudflared/config.yml` (backing up the old file) and does not merge multiple rules.
+- **Free Tunnel has no SLA.** Expect occasional reconnects.
+- **Host sleep breaks sessions.** No wake-on-LAN behind NAT.
+
+## Development
+
+```bash
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+cargo build --release
+```
+
+CI runs the same checks on every push and pull request.
+
+## License
+
+[MIT](LICENSE) © 2026 Harsh Shah

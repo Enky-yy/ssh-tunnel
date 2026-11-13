@@ -2,8 +2,14 @@
 name = "ssh-tunnel"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
 description = "Turnkey remote SSH access via Cloudflare Tunnel"
 license = "MIT"
+repository = "https://github.com/Enky-yy/ssh-tunnel"
+homepage = "https://github.com/Enky-yy/ssh-tunnel"
+readme = "README.md"
+keywords = ["ssh", "cloudflare", "tunnel", "remote-access", "cli"]
+categories = ["command-line-utilities", "network-programming"]
 
 [dependencies]
 anyhow = "1"

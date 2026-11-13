@@ -103,6 +103,7 @@ impl Config {
     pub fn save(&self) -> Result<()> {
         self.validate()?;
         fs::create_dir_all(Self::dir())?;
+        set_mode(&Self::dir(), 0o700)?;
         let text = toml::to_string_pretty(self)?;
         let p = Self::path();
         fs::write(&p, text)?;

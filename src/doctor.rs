@@ -252,14 +252,34 @@ fn authorized_keys_perms(cfg: &Config) -> Check {
 }
 
 fn secret_perms(cfg: &Config) -> Check {
-    let creds = cfg.creds();
-    match mode_of(&creds) {
-        None => Check::warn("secret perms", "credentials file missing"),
-        Some(mode) if mode & 0o044 != 0 => Check::warn(
-            "secret perms",
-            format!("{} is {mode:03o}; run `chmod 400`", creds.display()),
-        ),
-        Some(mode) => Check::ok("secret perms", format!("credentials {mode:03o}")),
+    let mut parts = Vec::new();
+    let mut worst = 0;
+    for (label, path, secret) in [
+        ("credentials", cfg.creds(), true),
+        ("cert", cfg.cert(), true),
+        ("ingress", cfg.cf_config(), false),
+    ] {
+        match mode_of(&path) {
+            None => {
+                parts.push(format!("{label} missing"));
+                worst = worst.max(1);
+            }
+            Some(mode) => {
+                let loose = if secret { mode & 0o077 } else { mode & 0o022 };
+                if loose != 0 {
+                    parts.push(format!("{label} {mode:03o} (too open)"));
+                    worst = worst.max(2);
+                } else {
+                    parts.push(format!("{label} {mode:03o}"));
+                }
+            }
+        }
+    }
+    let detail = parts.join(", ");
+    match worst {
+        2 => Check::warn("secret perms", detail),
+        1 => Check::warn("secret perms", detail),
+        _ => Check::ok("secret perms", detail),
     }
 }
 

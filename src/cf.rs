@@ -202,7 +202,8 @@ pub fn write_cf_config(cfg: &Config, path: &Path) -> Result<()> {
         let existing = std::fs::read_to_string(path)?;
         if existing != body {
             let backup = path.with_extension("yml.bak");
-            std::fs::copy(path, backup)?;
+            std::fs::copy(path, backup.as_path())?;
+            crate::config::set_mode(&backup, 0o600)?;
         }
     }
     std::fs::write(path, body)?;

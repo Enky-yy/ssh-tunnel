@@ -96,6 +96,7 @@ When `setup` finishes, it prints:
 | `logs [-f]` | Tail the user service journal |
 | `client add <name> [--key-file -] [--qr] [--identity]` | Print a device's SSH config; register its public key |
 | `client list` | Fingerprints from `authorized_keys` |
+| `fingerprint [--json]` | Show host key fingerprints and whether they match `known_hosts` |
 | `termux` | Print an Android/Termux setup script |
 
 ## Onboarding a device
@@ -230,6 +231,58 @@ callers, so an elevated shell cannot be tricked into running a different binary.
 The Termux script appends a marked `Host` block (with a backup) instead of
 overwriting an existing `~/.ssh/config`.
 
+## Hardening checklist
+
+The tunnel removes the need for inbound ports, but the host still needs its own
+baseline. These are the things this tool cannot do for you:
+
+**Firewall.** On Arch/CachyOS, `ufw enable` does not change the default policy:
+
+```bash
+grep DEFAULT_INPUT_POLICY /etc/default/ufw   # ACCEPT means nothing is filtered
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw reload
+```
+
+Nothing needs to be allowed for the tunnel: `cloudflared` dials out, and
+loopback traffic bypasses the firewall. Check what else is listening with
+`ss -tlnp`.
+
+**Bind sshd to loopback.** The tunnel forwards to `127.0.0.1:22`, so sshd does
+not need to be on the LAN. In `/etc/ssh/sshd_config.d/10-hardening.conf`:
+
+```
+ListenAddress 127.0.0.1
+```
+
+**Verify the host key.** `ssh.harsh-shah.me` is public, and clients trust the
+key on first use. Before connecting from a new device:
+
+```bash
+ssh-tunnel fingerprint          # on the host
+ssh-keyscan -t ed25519 ssh.harsh-shah.me | ssh-keygen -lf -   # on the device
+```
+
+Compare the SHA256 values. `fingerprint` also warns when `known_hosts` holds a
+different key for the hostname.
+
+**Do not enable `PerSourcePenalties`.** Through the tunnel every client appears
+as `127.0.0.1`, so a single attacker's failed attempts would penalise the
+loopback address and lock you out. The same reason makes `fail2ban` ineffective
+here; rate limit at the Cloudflare edge instead.
+
+**Optional: Cloudflare Access.** Adding an Access application (with a service
+token for `cloudflared access ssh`) puts an identity gate and rate limiting in
+front of sshd. It costs every client a token, so it is opt-in.
+
+**Credentials.** `~/.cloudflared/cert.pem` is zone-level: whoever holds it can
+create tunnels and rewrite DNS for the domain. It is needed for
+`tunnel list/create/route`, not for running the tunnel, so re-run
+`cloudflared tunnel login` only when managing, and rotate it if it leaks. Use a
+passphrase on the host key (`ssh-keygen -p -f ~/.ssh/id_ed25519`), and keep
+`~/.cloudflared` at `700` with credentials at `400`.
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -257,10 +310,12 @@ overwriting an existing `~/.ssh/config`.
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
-cargo build --release
+./scripts/build-release.sh
 ```
 
-CI runs the same checks on every push and pull request.
+`scripts/build-release.sh` remaps `$HOME` out of the binary's panic paths, so
+the release does not carry the builder's username. CI runs the same checks plus
+`cargo audit` on every push and pull request.
 
 ## License
 

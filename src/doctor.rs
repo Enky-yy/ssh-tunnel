@@ -341,8 +341,8 @@ async fn e2e(cfg: &Config, bin: &Path) -> Result<()> {
     cmd.arg("-o");
     cmd.arg(format!(
         "ProxyCommand={} access ssh --hostname {}",
-        bin.display(),
-        cfg.hostname
+        cf::shell_quote(&bin.display().to_string()),
+        cf::shell_quote(&cfg.hostname)
     ));
     if let Some(id) = &cfg.identity_file {
         cmd.arg("-o");

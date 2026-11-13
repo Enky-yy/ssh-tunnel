@@ -177,6 +177,11 @@ pub async fn login(bin: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Quote a path for `ssh`'s ProxyCommand, which ssh runs through the user's shell.
+pub fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r"'\''"))
+}
+
 pub fn write_cf_config(cfg: &Config, path: &Path) -> Result<()> {
     // Config values are allowlist-validated, so they cannot break out of YAML.
     let body = format!(
@@ -209,4 +214,27 @@ pub fn write_cf_config(cfg: &Config, path: &Path) -> Result<()> {
     std::fs::write(path, body)?;
     crate::config::set_mode(path, 0o600)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shell_quote;
+
+    #[test]
+    fn quotes_a_plain_path() {
+        assert_eq!(
+            shell_quote("/usr/bin/cloudflared"),
+            "'/usr/bin/cloudflared'"
+        );
+    }
+
+    #[test]
+    fn neutralises_shell_metacharacters() {
+        assert_eq!(shell_quote("/tmp/a; rm -rf ~"), "'/tmp/a; rm -rf ~'");
+    }
+
+    #[test]
+    fn escapes_single_quotes() {
+        assert_eq!(shell_quote("/tmp/it's"), r"'/tmp/it'\''s'");
+    }
 }

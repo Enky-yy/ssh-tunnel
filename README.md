@@ -148,7 +148,7 @@ without breaking host-key verification.
 `~/.config/ssh-tunnel/config.toml`:
 
 ```toml
-tunnel = "g15"
+tunnel = "tunnel_name"
 tunnel_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 hostname = "ssh.example.com"
 user = "alice"

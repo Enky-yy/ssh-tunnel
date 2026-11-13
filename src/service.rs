@@ -51,6 +51,29 @@ pub fn unit_contents(cfg: &Config) -> String {
          RestartSec=5s\n\
          TimeoutStopSec=10s\n\
          \n\
+         # Sandbox: cloudflared only needs its config, the network, and a socket\n\
+         NoNewPrivileges=yes\n\
+         PrivateTmp=yes\n\
+         PrivateDevices=yes\n\
+         ProtectSystem=strict\n\
+         ProtectHome=read-only\n\
+         ProtectKernelTunables=yes\n\
+         ProtectKernelModules=yes\n\
+         ProtectControlGroups=yes\n\
+         ProtectClock=yes\n\
+         ProtectHostname=yes\n\
+         RestrictSUIDSGID=yes\n\
+         RestrictNamespaces=yes\n\
+         RestrictRealtime=yes\n\
+         LockPersonality=yes\n\
+         MemoryDenyWriteExecute=yes\n\
+         SystemCallArchitectures=native\n\
+         SystemCallFilter=@system-service\n\
+         RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK\n\
+         CapabilityBoundingSet=\n\
+         AmbientCapabilities=\n\
+         UMask=0077\n\
+         \n\
          [Install]\n\
          WantedBy=default.target\n",
         tunnel = cfg.tunnel,

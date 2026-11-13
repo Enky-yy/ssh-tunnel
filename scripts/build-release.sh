@@ -13,4 +13,8 @@ if [ -n "${CARGO_HOME:-}" ] && [ "${CARGO_HOME}" != "${HOME}/.cargo" ]; then
   export RUSTFLAGS="${RUSTFLAGS} --remap-path-prefix=${CARGO_HOME}=${remap_to}/cargo"
 fi
 
+if [ -n "${GITHUB_WORKSPACE:-}" ] && [[ "${GITHUB_WORKSPACE}" != "${HOME}"* ]]; then
+  export RUSTFLAGS="${RUSTFLAGS} --remap-path-prefix=${GITHUB_WORKSPACE}=${remap_to}/workspace"
+fi
+
 exec cargo build --release "$@"

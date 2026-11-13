@@ -23,7 +23,23 @@ pub fn script(cfg: &Config) -> String {
     .unwrap();
     writeln!(s).unwrap();
     writeln!(s, "mkdir -p ~/.ssh && chmod 700 ~/.ssh").unwrap();
-    writeln!(s, "cat > ~/.ssh/config <<'EOF'").unwrap();
+    writeln!(s, "touch ~/.ssh/config && chmod 600 ~/.ssh/config").unwrap();
+    writeln!(s).unwrap();
+    writeln!(
+        s,
+        "# Append, never overwrite: other hosts in ~/.ssh/config must survive"
+    )
+    .unwrap();
+    writeln!(s, "if grep -qxF '# ssh-tunnel:{alias}' ~/.ssh/config; then").unwrap();
+    writeln!(
+        s,
+        "  echo \"Host {alias} already present in ~/.ssh/config\""
+    )
+    .unwrap();
+    writeln!(s, "else").unwrap();
+    writeln!(s, "  cp ~/.ssh/config ~/.ssh/config.bak").unwrap();
+    writeln!(s, "  cat >> ~/.ssh/config <<'SSH_TUNNEL_EOF'").unwrap();
+    writeln!(s, "# ssh-tunnel:{alias}").unwrap();
     writeln!(s, "Host {alias}").unwrap();
     writeln!(s, "    HostName {}", cfg.hostname).unwrap();
     writeln!(s, "    User {}", cfg.user).unwrap();
@@ -31,8 +47,15 @@ pub fn script(cfg: &Config) -> String {
     writeln!(s, "    ProxyCommand cloudflared access ssh --hostname %h").unwrap();
     writeln!(s, "    ServerAliveInterval 30").unwrap();
     writeln!(s, "    ServerAliveCountMax 3").unwrap();
-    writeln!(s, "EOF").unwrap();
-    writeln!(s, "chmod 600 ~/.ssh/config").unwrap();
+    writeln!(s, "# ssh-tunnel:{alias}:end").unwrap();
+    writeln!(s, "SSH_TUNNEL_EOF").unwrap();
+    writeln!(s, "  chmod 600 ~/.ssh/config").unwrap();
+    writeln!(
+        s,
+        "  echo \"Added Host {alias} to ~/.ssh/config (backup: ~/.ssh/config.bak)\""
+    )
+    .unwrap();
+    writeln!(s, "fi").unwrap();
     writeln!(s).unwrap();
     writeln!(s, "echo").unwrap();
     writeln!(

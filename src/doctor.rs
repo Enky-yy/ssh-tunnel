@@ -189,6 +189,10 @@ pub async fn run(cfg: &Config, deep: bool) -> Result<Vec<Check>> {
         None => checks.push(Check::warn("password auth", "could not determine")),
     }
 
+    checks.push(ssh_dir_perms());
+    checks.push(authorized_keys_perms(cfg));
+    checks.push(secret_perms(cfg));
+
     if deep {
         match &bin {
             Some(b) => match e2e(cfg, b).await {
@@ -200,6 +204,63 @@ pub async fn run(cfg: &Config, deep: bool) -> Result<Vec<Check>> {
     }
 
     Ok(checks)
+}
+
+#[cfg(unix)]
+fn mode_of(path: &Path) -> Option<u32> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path)
+        .ok()
+        .map(|m| m.permissions().mode() & 0o777)
+}
+
+#[cfg(not(unix))]
+fn mode_of(_path: &Path) -> Option<u32> {
+    None
+}
+
+fn ssh_dir_perms() -> Check {
+    let dir = crate::config::home().join(".ssh");
+    match mode_of(&dir) {
+        None => Check::warn("ssh dir", format!("missing {}", dir.display())),
+        Some(mode) if mode & 0o077 == 0 => {
+            Check::ok("ssh dir", format!("{} ({mode:03o})", dir.display()))
+        }
+        Some(mode) => Check::warn(
+            "ssh dir",
+            format!("{} is {mode:03o}; run `chmod 700 ~/.ssh`", dir.display()),
+        ),
+    }
+}
+
+fn authorized_keys_perms(cfg: &Config) -> Check {
+    let path = cfg.authorized_keys();
+    match fs::symlink_metadata(&path) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            Check::warn("key file perms", format!("{} is a symlink", path.display()))
+        }
+        Ok(_) => match mode_of(&path) {
+            Some(mode) if mode & 0o022 != 0 => Check::fail(
+                "key file perms",
+                format!("{} is {mode:03o}; run `chmod 600`", path.display()),
+            ),
+            Some(mode) => Check::ok("key file perms", format!("{mode:03o}")),
+            None => Check::warn("key file perms", "could not stat"),
+        },
+        Err(_) => Check::warn("key file perms", "authorized_keys missing"),
+    }
+}
+
+fn secret_perms(cfg: &Config) -> Check {
+    let creds = cfg.creds();
+    match mode_of(&creds) {
+        None => Check::warn("secret perms", "credentials file missing"),
+        Some(mode) if mode & 0o044 != 0 => Check::warn(
+            "secret perms",
+            format!("{} is {mode:03o}; run `chmod 400`", creds.display()),
+        ),
+        Some(mode) => Check::ok("secret perms", format!("credentials {mode:03o}")),
+    }
 }
 
 fn normalize_target(target: &str) -> (String, u16) {

@@ -2,6 +2,7 @@ mod cf;
 mod client;
 mod config;
 mod doctor;
+mod hostkey;
 mod net;
 mod service;
 mod status;
@@ -43,6 +44,8 @@ enum Cmd {
     Status,
     /// Check every layer from sshd to the Cloudflare edge
     Doctor(DoctorArgs),
+    /// Print the host key fingerprints clients should expect
+    Fingerprint,
     /// Tail the tunnel service logs
     Logs(LogsArgs),
     /// Print the SSH config for a device, or list registered keys
@@ -167,6 +170,10 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 std::process::exit(1);
             }
             Ok(())
+        }
+        Cmd::Fingerprint => {
+            let cfg = Config::load_required()?;
+            hostkey::run(&cfg, json)
         }
         Cmd::Logs(a) => {
             let cfg = Config::load_required()?;

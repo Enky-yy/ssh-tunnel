@@ -192,6 +192,7 @@ pub async fn run(cfg: &Config, deep: bool) -> Result<Vec<Check>> {
     checks.push(ssh_dir_perms());
     checks.push(authorized_keys_perms(cfg));
     checks.push(secret_perms(cfg));
+    checks.push(penalties_check(cfg));
 
     if deep {
         match &bin {
@@ -281,6 +282,74 @@ fn secret_perms(cfg: &Config) -> Check {
         1 => Check::warn("secret perms", detail),
         _ => Check::ok("secret perms", detail),
     }
+}
+
+/// Through the tunnel every client connects from 127.0.0.1, so sshd's
+/// per-source penalties punish the owner for an attacker's failed attempts.
+fn penalties_check(cfg: &Config) -> Check {
+    let (host, _) = normalize_target(&cfg.local_target);
+    if host != "127.0.0.1" {
+        return Check::ok("penalties", "not applicable (target is not loopback)");
+    }
+    match effective_value("PerSourcePenalties") {
+        Some(value) if value == "no" => Check::ok("penalties", "PerSourcePenalties off"),
+        Some(value) => Check::warn(
+            "penalties",
+            format!(
+                "PerSourcePenalties={value}; all tunnel clients are 127.0.0.1, so one attacker can lock you out. Set `PerSourcePenalties no`"
+            ),
+        ),
+        // sshd enables penalties by default, even when the directive is absent.
+        None if penalties_reachable() => Check::warn(
+            "penalties",
+            "enabled by default; all tunnel clients are 127.0.0.1, so set `PerSourcePenalties no`",
+        ),
+        None => Check::ok("penalties", "could not read sshd config"),
+    }
+}
+
+/// Collect `Directive value` from the drop-ins and the main config in the order
+/// sshd applies them. Last assignment wins. Returns None when the directive is
+/// not set anywhere (or nothing is readable).
+fn effective_value(keyword: &str) -> Option<String> {
+    let dir = Path::new("/etc/ssh/sshd_config.d");
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(entries) = fs::read_dir(dir) {
+        let mut names: Vec<_> = entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "conf"))
+            .collect();
+        names.sort();
+        files.extend(names);
+    }
+    let main = Path::new("/etc/ssh/sshd_config");
+    if main.exists() {
+        files.push(main.to_path_buf());
+    }
+
+    let mut found = None;
+    for path in files {
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        for line in text.lines() {
+            let line = line.split('#').next().unwrap_or("").trim();
+            let mut parts = line.splitn(2, char::is_whitespace);
+            let Some(name) = parts.next() else { continue };
+            if !name.eq_ignore_ascii_case(keyword) {
+                continue;
+            }
+            if let Some(value) = parts.next() {
+                found = Some(value.trim().to_string());
+            }
+        }
+    }
+    found
+}
+
+fn penalties_reachable() -> bool {
+    Path::new("/etc/ssh/sshd_config").exists()
 }
 
 fn normalize_target(target: &str) -> (String, u16) {
